@@ -181,6 +181,7 @@ describe("local-heavy-check-runtime", () => {
     expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--version"])).toBe(false);
     expect(shouldAcquireLocalHeavyCheckLockForTsgo(["-v"])).toBe(false);
     expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--init"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--showConfig"])).toBe(false);
   });
 
   it("keeps the heavy-check lock for real tsgo runs", () => {
@@ -249,6 +250,16 @@ describe("local-heavy-check-runtime", () => {
     expect(
       shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware", "--", "sample.ts"], { cwd }),
     ).toBe(false);
+  });
+
+  it("skips the heavy-check lock for oxlint metadata commands", () => {
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--help"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["-h"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--version"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["-V"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--rules"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--print-config"])).toBe(false);
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--init"])).toBe(false);
   });
 
   it("keeps the heavy-check lock for directory targets and broad oxlint runs", () => {

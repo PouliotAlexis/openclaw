@@ -92,6 +92,21 @@ export function shouldAcquireLocalHeavyCheckLockForOxlint(
     return true;
   }
 
+  if (
+    args.some(
+      (arg) =>
+        arg === "--help" ||
+        arg === "-h" ||
+        arg === "--version" ||
+        arg === "-V" ||
+        arg === "--rules" ||
+        arg === "--print-config" ||
+        arg === "--init",
+    )
+  ) {
+    return false;
+  }
+
   const separatorIndex = args.indexOf("--");
   const candidateArgs = (() => {
     if (separatorIndex !== -1) {
@@ -121,7 +136,12 @@ export function shouldAcquireLocalHeavyCheckLockForTsgo(args, env = process.env)
 
   return !args.some(
     (arg) =>
-      arg === "--help" || arg === "-h" || arg === "--version" || arg === "-v" || arg === "--init",
+      arg === "--help" ||
+      arg === "-h" ||
+      arg === "--version" ||
+      arg === "-v" ||
+      arg === "--init" ||
+      arg === "--showConfig",
   );
 }
 
