@@ -39,11 +39,13 @@ RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-windows.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
 TIMEOUT_SNAPSHOT_S=240
-TIMEOUT_INSTALL_S=1200
+TIMEOUT_GIT_SETUP_S=1200
+TIMEOUT_INSTALL_S=300
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=240
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 60))
-TIMEOUT_GATEWAY_S=120
+# verify_gateway_reachable runs six 30s probes plus short retry sleeps.
+TIMEOUT_GATEWAY_S=240
 TIMEOUT_AGENT_S=180
 
 FRESH_MAIN_STATUS="skip"
@@ -1900,7 +1902,7 @@ try {
   Write-ProgressLog 'install.download-tgz'
   Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
   Write-ProgressLog 'install.install-tgz'
-  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
+  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --omit=dev --no-fund --no-audit }
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   Write-ProgressLog 'install.verify-version'
   Invoke-Logged 'openclaw --version' { & $openclaw --version }
@@ -2248,9 +2250,9 @@ run_fresh_main_lane() {
   local install_log_phase
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "fresh.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-  if ! phase_run "fresh.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
+  if ! phase_run "fresh.ensure-git" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip"; then
     phase_run "fresh.wait-for-user-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-    phase_run "fresh.ensure-git-retry" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
+    phase_run "fresh.ensure-git-retry" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip" || return $?
   fi
   if phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"; then
     install_log_phase="fresh.install-main"
@@ -2274,9 +2276,9 @@ run_upgrade_lane() {
   local baseline_version
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "upgrade.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-  if ! phase_run "upgrade.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
+  if ! phase_run "upgrade.ensure-git" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip"; then
     phase_run "upgrade.wait-for-user-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-    phase_run "upgrade.ensure-git-retry" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
+    phase_run "upgrade.ensure-git-retry" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip" || return $?
   fi
   if upgrade_uses_host_tgz; then
     phase_run "upgrade.install-baseline-package" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz" || return $?
