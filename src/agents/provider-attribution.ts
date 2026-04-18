@@ -1,3 +1,4 @@
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -92,6 +93,7 @@ export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
   modelId?: string | null;
   compat?: {
     supportsStore?: boolean;
+    supportsPromptCacheKey?: boolean;
   } | null;
 };
 
@@ -123,9 +125,14 @@ const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
   "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
 ]);
-const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
+const OPENAI_RESPONSES_APIS = new Set([
+  "openai-responses",
+  "azure-openai-responses",
+  "openai-codex-responses",
+]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const MOONSHOT_COMPAT_PROVIDERS = new Set(["moonshot", "kimi"]);
+const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>(["xai-native"]);
 
 function formatOpenClawUserAgent(version: string): string {
   return `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${version}`;
@@ -179,6 +186,36 @@ function normalizeComparableBaseUrl(value: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function isManifestProviderEndpointClass(value: string): value is ProviderEndpointClass {
+  return MANIFEST_PROVIDER_ENDPOINT_CLASSES.has(value as ProviderEndpointClass);
+}
+
+function resolveManifestProviderEndpoint(params: {
+  host: string;
+  normalizedBaseUrl?: string;
+}): ProviderEndpointResolution | undefined {
+  const registry = loadPluginManifestRegistry({ cache: true });
+  for (const plugin of registry.plugins) {
+    for (const endpoint of plugin.providerEndpoints ?? []) {
+      if (!isManifestProviderEndpointClass(endpoint.endpointClass)) {
+        continue;
+      }
+      if (endpoint.hosts?.some((host) => host.toLowerCase() === params.host)) {
+        return { endpointClass: endpoint.endpointClass, hostname: params.host };
+      }
+      if (
+        params.normalizedBaseUrl &&
+        endpoint.baseUrls?.some(
+          (baseUrl) => normalizeComparableBaseUrl(baseUrl) === params.normalizedBaseUrl,
+        )
+      ) {
+        return { endpointClass: endpoint.endpointClass, hostname: params.host };
+      }
+    }
+  }
+  return undefined;
 }
 
 function isLocalEndpointHost(host: string): boolean {
@@ -241,9 +278,6 @@ export function resolveProviderEndpoint(
   if (host === "openrouter.ai" || host.endsWith(".openrouter.ai")) {
     return { endpointClass: "openrouter", hostname: host };
   }
-  if (host === "api.x.ai" || host === "api.grok.x.ai") {
-    return { endpointClass: "xai-native", hostname: host };
-  }
   if (host === "api.z.ai") {
     return { endpointClass: "zai-native", hostname: host };
   }
@@ -267,6 +301,10 @@ export function resolveProviderEndpoint(
       hostname: host,
       googleVertexRegion: googleVertexHost[1],
     };
+  }
+  const manifestEndpoint = resolveManifestProviderEndpoint({ host, normalizedBaseUrl });
+  if (manifestEndpoint) {
+    return manifestEndpoint;
   }
   if (isLocalEndpointHost(host)) {
     return { endpointClass: "local", hostname: host };
@@ -314,6 +352,11 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
     default:
       return provider || "unknown";
   }
+}
+
+export function isOpenAIResponsesApi(api: string | null | undefined): boolean {
+  const normalizedApi = normalizeOptionalLowercaseString(api);
+  return normalizedApi !== undefined && OPENAI_RESPONSES_APIS.has(normalizedApi);
 }
 
 export function resolveProviderAttributionIdentity(
@@ -539,7 +582,6 @@ export function resolveProviderRequestCapabilities(
   const policy = resolveProviderRequestPolicy(input, env);
   const provider = policy.provider;
   const api = normalizeOptionalLowercaseString(input.api);
-  const normalizedModelId = normalizeOptionalLowercaseString(input.modelId);
   const endpointClass = policy.endpointClass;
   const isKnownNativeEndpoint =
     endpointClass === "anthropic-public" ||
@@ -564,13 +606,24 @@ export function resolveProviderRequestCapabilities(
   let compatibilityFamily: ProviderRequestCompatibilityFamily | undefined;
   if (provider && MOONSHOT_COMPAT_PROVIDERS.has(provider)) {
     compatibilityFamily = "moonshot";
-  } else if (
-    provider === "ollama" &&
-    normalizedModelId?.startsWith("kimi-k") &&
-    normalizedModelId.includes(":cloud")
-  ) {
-    compatibilityFamily = "moonshot";
   }
+
+  const isResponsesApi = isOpenAIResponsesApi(api);
+  const promptCacheKeySupport = input.compat?.supportsPromptCacheKey;
+  // Default strip behavior (proxy-like endpoints with responses APIs) is
+  // preserved as a safety net for providers that reject prompt_cache_key,
+  // see #48155 (Volcano Engine DeepSeek). Operators running their payload
+  // through an OpenAI-compatible proxy known to forward the field
+  // (CLIProxy, LiteLLM, etc.) can opt out via compat.supportsPromptCacheKey
+  // to recover prompt caching; providers known to reject the field can
+  // force the strip with compat.supportsPromptCacheKey = false even on
+  // native endpoints.
+  const shouldStripResponsesPromptCache =
+    promptCacheKeySupport === true
+      ? false
+      : promptCacheKeySupport === false
+        ? isResponsesApi
+        : isResponsesApi && policy.usesExplicitProxyLikeEndpoint;
 
   return {
     ...policy,
@@ -598,17 +651,14 @@ export function resolveProviderRequestCapabilities(
       (endpointClass === "default" || endpointClass === "anthropic-public"),
     // This is intentionally the gate for emitting `store: false` on Responses
     // transports, not just a statement about vendor support in the abstract.
-    supportsResponsesStoreField:
-      input.compat?.supportsStore !== false && api !== undefined && OPENAI_RESPONSES_APIS.has(api),
+    supportsResponsesStoreField: input.compat?.supportsStore !== false && isResponsesApi,
     allowsResponsesStore:
       input.compat?.supportsStore !== false &&
       provider !== undefined &&
-      api !== undefined &&
-      OPENAI_RESPONSES_APIS.has(api) &&
+      isResponsesApi &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       policy.usesKnownNativeOpenAIEndpoint,
-    shouldStripResponsesPromptCache:
-      api !== undefined && OPENAI_RESPONSES_APIS.has(api) && policy.usesExplicitProxyLikeEndpoint,
+    shouldStripResponsesPromptCache,
     // Native endpoint class is the real signal here. Users can point a generic
     // provider key at Moonshot or DashScope and still need streaming usage.
     supportsNativeStreamingUsageCompat:
